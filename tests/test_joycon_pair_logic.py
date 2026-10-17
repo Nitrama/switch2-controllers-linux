@@ -35,7 +35,7 @@ class _Pad:
         self.closed = False
         self.released = False
 
-    def update(self, *args):
+    def update(self, *args, **kwargs):
         self.updates.append(args)
 
     def close(self):

@@ -602,8 +602,7 @@ class _Worker:
             self.controller = ctrl
             with self.hub.bridge.joycons.activation_context():
                 self._ensure_gamepad(ctrl)
-            if self.gamepad is not None and self.config.enable_rumble:
-                self.gamepad.rumble_cb = self._on_rumble
+                self.hub.bridge.joycons.bind_individual_rumble(self)
             if self.dsu is not None:
                 self.dsu.set_slot(self.slot, True, mac=mac, battery_mv=ctrl.battery_mv or 0)
             if self.on_topology_change is not None:
@@ -622,29 +621,31 @@ class _Worker:
                 ctrl.close()
             except Exception:  # noqa: BLE001
                 pass
-        if self.gamepad is not None:
-            self.gamepad.rumble_cb = None
-            self.gamepad.close()
-            self.gamepad = None
-            self._gamepad_product = None
-        if self.motion is not None:
-            self.motion.close()
-            self.motion = None
-
-    def _teardown_session(self, *, full: bool = False) -> None:
-        self.hub.bridge.joycons.disconnect(self)
-        if self.gamepad is not None:
-            self.gamepad.rumble_cb = None
-            if full:
+        with self.hub.bridge.joycons.activation_context():
+            if self.gamepad is not None:
+                self.gamepad.rumble_cb = None
                 self.gamepad.close()
                 self.gamepad = None
                 self._gamepad_product = None
-            else:
-                self.hub.bridge.joycons.release_individual(self.gamepad)
-        if self.motion is not None:
-            if full:
+            if self.motion is not None:
                 self.motion.close()
                 self.motion = None
+
+    def _teardown_session(self, *, full: bool = False) -> None:
+        with self.hub.bridge.joycons.activation_context():
+            self.hub.bridge.joycons.disconnect(self)
+            if self.gamepad is not None:
+                self.gamepad.rumble_cb = None
+                if full:
+                    self.gamepad.close()
+                    self.gamepad = None
+                    self._gamepad_product = None
+                else:
+                    self.hub.bridge.joycons.release_individual(self.gamepad)
+            if self.motion is not None:
+                if full:
+                    self.motion.close()
+                    self.motion = None
         if self.dsu is not None:
             self.dsu.set_slot(self.slot, False)
         if self.controller:

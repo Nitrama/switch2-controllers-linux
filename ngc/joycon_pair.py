@@ -1,7 +1,6 @@
 """Joy-Con 2 single/paired output modes kept separate from the core bridge."""
 from __future__ import annotations
 
-from contextlib import nullcontext
 import logging
 import os
 import threading
@@ -123,8 +122,8 @@ class JoyConPair:
         left_trigger: int,
         right_trigger: int,
     ) -> None:
-        self.ensure()
         with self._lock:
+            self.ensure()
             if product_id == P.JOYCON2_LEFT_PID:
                 self._left_buttons = buttons & _LEFT_MASK
                 self._left_stick = left_stick
@@ -193,7 +192,7 @@ class JoyConModeManager:
         return product_id in _JOYCON_PIDS
 
     def activation_context(self):
-        return self.lock if self.auto else nullcontext()
+        return self.lock
 
     def filter_pending(self, hub, pending: list[str]) -> list[str]:
         if not self.require_pair:
@@ -219,22 +218,23 @@ class JoyConModeManager:
     def route_input(self, worker, ctrl, report: P.InputReport, calibrated) -> bool:
         if not self.is_joycon(ctrl.product_id):
             return False
-        if self.auto:
-            self._observe(ctrl.product_id, _is_attached(report.raw))
-        lx, ly, rx, ry, lt, rt = calibrated
-        if self.pair_active(ctrl.product_id):
-            if ctrl.product_id == P.JOYCON2_RIGHT_PID and ctrl.left_calib is not None:
-                rx, ry = ctrl.left_calib.apply(report.right_stick_raw)
-            assert self.pair is not None
-            self.pair.update(ctrl.product_id, report.buttons, (lx, ly), (rx, ry), lt, rt)
-        elif worker.gamepad is not None:
-            if ctrl.product_id == P.JOYCON2_LEFT_PID:
-                worker.gamepad.update(report.buttons, (-ly, lx), (0.0, 0.0), 0, 0)
-            else:
-                if ctrl.left_calib is not None:
+        with self.lock:
+            if self.auto:
+                self._observe(ctrl.product_id, _is_attached(report.raw))
+            lx, ly, rx, ry, lt, rt = calibrated
+            if self.pair_active(ctrl.product_id):
+                if ctrl.product_id == P.JOYCON2_RIGHT_PID and ctrl.left_calib is not None:
                     rx, ry = ctrl.left_calib.apply(report.right_stick_raw)
-                worker.gamepad.update(report.buttons, (ry, -rx), (0.0, 0.0), 0, 0)
-        return True
+                assert self.pair is not None
+                self.pair.update(ctrl.product_id, report.buttons, (lx, ly), (rx, ry), lt, rt)
+            elif worker.gamepad is not None:
+                if ctrl.product_id == P.JOYCON2_LEFT_PID:
+                    worker.gamepad.update(report.buttons, (-ly, lx), (0.0, 0.0), 0, 0, emit_dpad=False)
+                else:
+                    if ctrl.left_calib is not None:
+                        rx, ry = ctrl.left_calib.apply(report.right_stick_raw)
+                    worker.gamepad.update(report.buttons, (ry, -rx), (0.0, 0.0), 0, 0, emit_dpad=False)
+            return True
 
     def ensure_pair_output(self, worker, ctrl) -> bool:
         if not self.pair_active(ctrl.product_id):
@@ -300,8 +300,9 @@ class JoyConModeManager:
             self._partial_pair_since = None
 
     def close(self) -> None:
-        if self.pair is not None:
-            self.pair.close()
+        with self.lock:
+            if self.pair is not None:
+                self.pair.close()
 
     def _observe(self, product_id: int, attached: bool) -> None:
         with self.lock:
@@ -321,32 +322,34 @@ class JoyConModeManager:
                 self._switch(desired)
 
     def _switch(self, desired: str) -> None:
-        self.output_mode = desired
-        workers = [
-            w for w in self.bridge.workers
-            if w.controller is not None and self.is_joycon(w.controller.product_id)
-        ]
-        if desired == "pair":
-            for worker in workers:
-                if worker.gamepad is not None:
-                    worker.gamepad.rumble_cb = None
-                    worker.gamepad.close()
-                    worker.gamepad = None
-                    worker._gamepad_product = None
-            assert self.pair is not None
-            self.pair.ensure()
-        else:
-            assert self.pair is not None
-            self.pair.close()
-            for worker in workers:
-                worker._ensure_gamepad(worker.controller)
-                self.bind_individual_rumble(worker)
-        self._apply_mode_leds()
-        logger.info("automatic Joy-Con output mode: %s", desired)
-        self.bridge._publish_state()
+        with self.lock:
+            self.output_mode = desired
+            workers = [
+                w for w in self.bridge.workers
+                if w.controller is not None and self.is_joycon(w.controller.product_id)
+            ]
+            if desired == "pair":
+                for worker in workers:
+                    if worker.gamepad is not None:
+                        worker.gamepad.rumble_cb = None
+                        worker.gamepad.close()
+                        worker.gamepad = None
+                        worker._gamepad_product = None
+                assert self.pair is not None
+                self.pair.ensure()
+            else:
+                assert self.pair is not None
+                self.pair.close()
+                for worker in workers:
+                    worker._ensure_gamepad(worker.controller)
+                    self.bind_individual_rumble(worker)
+            self._apply_mode_leds()
+            logger.info("automatic Joy-Con output mode: %s", desired)
+            self.bridge._publish_state()
 
     def _rumble_pair(self, strong: float, weak: float) -> None:
         for worker in self.bridge.workers:
             ctrl = worker.controller
-            if ctrl is not None and self.is_joycon(ctrl.product_id):
+            if (worker.config.enable_rumble and ctrl is not None
+                    and self.is_joycon(ctrl.product_id)):
                 worker._on_rumble(strong, weak)
