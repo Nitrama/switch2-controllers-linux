@@ -166,9 +166,17 @@ class JoyConPair:
 
     def close(self) -> None:
         with self._lock:
-            if self.gamepad is not None:
-                self.gamepad.close()
+            try:
+                if self.gamepad is not None:
+                    self.gamepad.close()
+            finally:
                 self.gamepad = None
+                self._left_buttons = 0
+                self._right_buttons = 0
+                self._left_stick = (0.0, 0.0)
+                self._right_stick = (0.0, 0.0)
+                self._left_trigger = 0
+                self._right_trigger = 0
 
 
 class JoyConModeManager:

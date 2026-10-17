@@ -14,6 +14,34 @@ from test_joycon_pair_logic import _Report, _Codes, P, modes
 class OutputRegressionTests(unittest.TestCase):
     setUp = fixtures.JoyConModeTests.setUp
 
+    def test_pair_reentry_starts_other_half_neutral(self):
+        pair = modes.JoyConPair()
+        pair.update(
+            P.JOYCON2_LEFT_PID,
+            P.SWITCH_BUTTONS['UP'],
+            (0.75, -0.5),
+            (0, 0),
+            1,
+            0,
+        )
+        first_pad = pair.gamepad
+
+        pair.close()
+        pair.update(
+            P.JOYCON2_RIGHT_PID,
+            0,
+            (0, 0),
+            (0.25, -0.25),
+            0,
+            1,
+        )
+
+        self.assertTrue(first_pad.closed)
+        self.assertEqual(
+            pair.gamepad.updates[-1],
+            (0, (0.0, 0.0), (0.25, -0.25), 0, 1),
+        )
+
     def test_input_and_mode_switch_are_atomic(self):
         self.manager._switch('pair')
         entered = threading.Event()
